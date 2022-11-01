@@ -1,0 +1,237 @@
+
+
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name='viewport' content='width=device-width, user-scalable=no' />
+        <title>Yoshi Bucks Supply</title>
+    </head>
+   <link rel="stylesheet" href="style.css">
+   </br>
+   
+    <body>
+	    
+        <div id="results"></div>
+        <div id="error"></div>
+        
+        <script>
+
+collection = 'yoshidrops';
+schema = 'yoshibucks';
+token = 'YOSHIBK';
+display = 'YB$ ';
+fetchDelay = 4;
+fetchRetries = 10;
+
+endpoint = 'https://wax.greymass.com/';
+
+calculate();
+
+async function calculate()
+{
+
+  var results = '';
+
+  var templates = await fetchtemplates();
+
+  var burnFetches = [];
+  for (var index = 0; index < templates.length; ++index)
+  {
+    burnFetches.push(fetchburncount(templates[index].templateId));
+  }
+  burnCounts = await Promise.all(burnFetches);
+  for (var index = 0; index < templates.length; ++index)
+  {
+    templates[index].burnCount = burnCounts[index];
+  }
+
+  var tokenizednft = await fetchtokenizednft();
+
+  var vaultFetches = [];
+  for (var index = 0; index < templates.length; ++index)
+  {
+    vaultFetches.push(fetchvaultcount(tokenizednft[templates[index].templateId].Vault));
+  }
+  vaultCounts = await Promise.all(vaultFetches);
+  for (var index = 0; index < templates.length; ++index)
+  {
+    templates[index].vaultCount = vaultCounts[index];
+  }
+
+
+  templates.sort((a, b) => { return a.denomination > b.denomination ? 1 : -1; });
+
+  results += '<table>';
+  results += '<tr><th>Denomination</th><th>Issued</th><th>Burned</th><th>Remaining</th><th>Tokenized</th><th>Tokenized Value</th><th>Total Value</th></tr>';
+
+  var issued = 0;
+  var burned = 0;
+  var remaining = 0;
+  var value = 0;
+  var tokenized = 0;
+  var tokenizedValue = 0;
+
+  for (var index = 0; index < templates.length; ++index)
+  {
+    issued += templates[index].issueCount;
+    burned += templates[index].burnCount;
+    remaining += templates[index].issueCount - templates[index].burnCount;
+    value += (templates[index].issueCount - templates[index].burnCount) * templates[index].denomination;
+    tokenized += templates[index].vaultCount;
+    tokenizedValue += templates[index].vaultCount * templates[index].denomination;
+
+    results += '<tr>';
+    results += '<td> <div class="links"><a href="https://alcor.exchange/swap?output=YOSHIBK-tokenizednft&input=WAX-eosio.token" target="_blank">' + display + comma(templates[index].denomination) + '</a></div> </td>';
+    results += '<td>' + comma(templates[index].issueCount) + '</td>';
+    results += '<td>' + comma(templates[index].burnCount) + '</td>';
+    results += '<td>' + comma(templates[index].issueCount - templates[index].burnCount) + '</td>';
+    results += '<td>' + comma(templates[index].vaultCount) + '</td>';
+    results += '<td>' + display + comma(templates[index].vaultCount * templates[index].denomination) + '</td>';
+    results += '<td>' + display + comma((templates[index].issueCount - templates[index].burnCount) * templates[index].denomination) + '</td>';
+    results += '</tr>';
+  }
+
+
+  results += '<th>Totals</th>';
+  results += '<td><b>' + comma(issued) + '</b></td>';
+  results += '<td><b>' + comma(burned) + '</b></td>';
+  results += '<td><b>' + comma(remaining) + '</b></td>';
+  results += '<td><b>' + comma(tokenized) + '</b></td>';
+  results += '<td><b>' + display + comma(tokenizedValue) + '</b></td>';
+  results += '<td><b>' + display + comma(value) + '</b></td>';
+  results += '</tr><b>';
+
+  document.getElementById('results').innerHTML = results;
+}
+
+async function fetchtemplates()
+{
+  var results = [];
+  var page = 1;
+  var perPage = 100;
+
+  while (true)
+  {
+    const url =
+      "https://wax.api.atomicassets.io/atomicassets/v1/templates?" +
+      "collection_name=" + collection +
+      "&schema_name=" + schema +
+      "&has_assets=true" +
+      "&limit=" + perPage +
+      "&page=" + page
+    ;
+
+    const response = await fetchRetry(url, fetchDelay, fetchRetries, { headers: { "Content-Type": "text/plain" }, method: "GET" });
+    const templateData = await response.json();
+
+    if (templateData.success === true)
+    {
+      for (var templateIndex = 0; templateIndex < templateData.data.length; ++templateIndex)
+      {
+        results.push({
+          templateId: templateData.data[templateIndex].template_id,
+          denomination: parseInt(templateData.data[templateIndex].immutable_data.amount_spent),
+          issueCount: parseInt(templateData.data[templateIndex].issued_supply),
+        });
+      }
+
+      if (templateData.data.length < perPage)
+      {
+        break;
+      }
+
+      ++page;
+    }
+    else
+    {
+      document.getElementById('error').innerHTML = "ERROR: " + templateData.message;
+      return [];
+    }
+  }
+
+  return results;
+}
+
+async function fetchburncount(templateId)
+{
+  const url = 'https://wax.api.atomicassets.io/atomicassets/v1/templates/' + collection + '/' + templateId + '/stats';
+
+  const response = await fetchRetry(url, fetchDelay, fetchRetries, { headers: { "Content-Type": "text/plain" }, method: "GET" });
+  const templateData = await response.json();
+
+  if (templateData.success === true)
+  {
+    return parseInt(templateData.data.burned);
+  }
+  else
+  {
+    document.getElementById('error').innerHTML = "ERROR: " + templateData.message;
+    return -1;
+  }
+}
+
+async function fetchtokenizednft()
+{
+  var path = "v1/chain/get_table_rows";
+  var data = JSON.stringify({json:true,code:"tokenizednft",scope:token,table:"values",limit:100});
+  const response = await fetchRetry(endpoint + path, fetchDelay, fetchRetries, { headers: { "Content-Type": "text/plain" }, body: data, method: "POST" });
+  const body = await response.json();
+  if (body.rows && Array.isArray(body.rows))
+  {
+    var results = {};
+
+    for (var index = 0; index < body.rows.length; ++index)
+    {
+      results[body.rows[index].TemplateId] = body.rows[index];
+    }
+    return results;
+  }
+  else
+  {
+    document.getElementById('error').innerHTML = "ERROR: Unexpected response from endpoint";
+    return {};
+  }
+}
+
+async function fetchvaultcount(vault)
+{
+  const url = 'https://wax.api.atomicassets.io/atomicassets/v1/accounts/' + vault + '/' + collection;
+
+  const response = await fetchRetry(url, fetchDelay, fetchRetries, { headers: { "Content-Type": "text/plain" }, method: "GET" });
+  const templateData = await response.json();
+
+  if (templateData.success === true)
+  {
+    return templateData.data.schemas.length > 0 ? parseInt(templateData.data.schemas[0].assets) : 0;
+  }
+  else
+  {
+    document.getElementById('error').innerHTML = "ERROR: " + templateData.message;
+    return -1;
+  }
+}
+
+function comma(num)
+{
+  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+function wait(delay){
+    return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+function fetchRetry(url, delay, tries, fetchOptions = {}) {
+    function onError(err){
+        triesLeft = tries - 1;
+        if(!triesLeft){
+            throw err;
+        }
+        return wait(delay).then(() => fetchRetry(url, delay, triesLeft, fetchOptions));
+    }
+    return fetch(url,fetchOptions).then((response) => {if (response.ok) { return response; } else { return onError() }}).catch(onError);
+}
+        </script>
+    </body>
+	</br>
+</html>
